@@ -2,13 +2,13 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+
 use hyper::server::conn::AddrStream;
-use hyper::{Body, Request, Response, Server};
+use hyper::{Body, Request, Response, Server, Method, StatusCode};
 use hyper::service::{make_service_fn, service_fn};
-use hyper::{Method, StatusCode};
+
 use serde_json::Value;
 use rand::Rng;
-use serde::{Serialize, Deserialize};
 
 #[macro_use] extern crate serde_derive;
 
@@ -20,12 +20,12 @@ struct Order {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct Data {
+struct SharedData {
     order_count: u64,
     tables: HashMap<u64, Vec<Order>>,
 }
 
-impl Data {
+impl SharedData {
     fn add_items(&mut self, table: u64, items: Vec<String>) {
         let mut rng = rand::thread_rng();
         let mut orders = items.iter().map(|item| {
@@ -47,9 +47,19 @@ impl Data {
             }
         };
     }
+
+    fn remove_item(&mut self, table: u64, order_id: u64) {
+        let orders = self.tables.get_mut(&table).unwrap();
+        println!("orders bef: {:?}", orders);
+        let index = orders.iter().position(|o| o.order_id == order_id).unwrap();
+
+        println!("index: {}", index);
+        orders.remove(index);
+        println!("order af {:?}", orders);
+    }
 }
 
-async fn handle_request(req: Request<Body>, data: Arc<std::sync::Mutex<Data>>) -> Result<Response<Body>, hyper::Error> {
+async fn handle_request(req: Request<Body>, data: Arc<std::sync::Mutex<SharedData>>) -> Result<Response<Body>, hyper::Error> {
     match (req.method(), req.uri().path()) {
         (&Method::GET, "/items") => {
             let params: HashMap<String, String> = req
@@ -70,10 +80,12 @@ async fn handle_request(req: Request<Body>, data: Arc<std::sync::Mutex<Data>>) -
             let response = post_items(data.clone(), value);
             Ok(response)
         },
-        // (&Method::DELETE, "/items") => {
-        //     let response = delete_item(data.clone());
-        //     Ok(response)
-        // },
+        (&Method::POST, "/items/delete") => {
+            let body_bytes = hyper::body::to_bytes(req.into_body()).await?;
+            let value: Value = serde_json::from_slice(&body_bytes).unwrap();
+            let response = delete_item(data.clone(), value);
+            Ok(response)
+        },
         _ => {
             let mut not_found = Response::default();
             *not_found.status_mut() = StatusCode::NOT_FOUND;
@@ -84,7 +96,7 @@ async fn handle_request(req: Request<Body>, data: Arc<std::sync::Mutex<Data>>) -
 
 #[tokio::main]
 async fn main() {
-    let data = Arc::new(Mutex::new(Data { order_count: 0, tables: HashMap::new() })) ;
+    let data = Arc::new(Mutex::new(SharedData { order_count: 0, tables: HashMap::new() })) ;
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
 
@@ -113,7 +125,7 @@ async fn shutdown_signal() {
         .expect("failed to install CTRL+C signal handler");
 }
 
-fn get_items(data: Arc<Mutex<Data>>, params: HashMap<String, String>) -> Response<Body> {
+fn get_items(shared_data: Arc<Mutex<SharedData>>, params: HashMap<String, String>) -> Response<Body> {
     let mut response = Response::default();
     let table = params.get("table");
 
@@ -123,14 +135,17 @@ fn get_items(data: Arc<Mutex<Data>>, params: HashMap<String, String>) -> Respons
     }
 
     let table_int = table.unwrap().parse::<u64>().unwrap();
-    let json_string = serde_json::to_string(data.lock().unwrap().tables.get(&table_int).unwrap()).unwrap();
+    
+    let data = shared_data.lock().unwrap();
+    let items = data.tables.get(&table_int).unwrap();
+    let json_string = serde_json::to_string(items).unwrap();
 
     *response.body_mut() = hyper::Body::from(json_string);
     *response.status_mut() = StatusCode::OK;
     response
 }
 
-fn post_items(data: Arc<Mutex<Data>>, value: Value) -> Response<Body> {
+fn post_items(shared_data: Arc<Mutex<SharedData>>, value: Value) -> Response<Body> {
     let mut response = Response::default();
 
     let table = value["table"].as_u64();
@@ -146,19 +161,25 @@ fn post_items(data: Arc<Mutex<Data>>, value: Value) -> Response<Body> {
         .map(|x| x.to_string())
         .collect::<Vec<String>>();
 
-    data.lock().unwrap().add_items(table.unwrap(), items);
-    println!("{:?}", data.lock().unwrap());
+        shared_data.lock().unwrap().add_items(table.unwrap(), items);
 
     *response.status_mut() = StatusCode::OK;
     response
 }
 
-// fn delete_item(data: Arc<Mutex<Data>>, value: Value) -> Response<Body> {
-    // let mut response = Response::default();
+fn delete_item(shared_data: Arc<Mutex<SharedData>>, value: Value) -> Response<Body>  {
+    let mut response = Response::default();
 
-    // let table = value["table"].as_u64();
-    // let order_id = value["order_id"].as_u64();
+    let table = value["table"].as_u64();
+    let order_id = value["order_id"].as_u64();
 
-    // *response.status_mut() = StatusCode::OK;
-    // return response
-// }
+    if table.is_none() || order_id.is_none() {
+        *response.status_mut() = StatusCode::BAD_REQUEST;
+        return response
+    }
+
+    shared_data.lock().unwrap().remove_item(table.unwrap(), order_id.unwrap());
+
+    *response.status_mut() = StatusCode::OK;
+    response
+}
