@@ -8,15 +8,18 @@ use hyper::service::{make_service_fn, service_fn};
 use hyper::{Method, StatusCode};
 use serde_json::Value;
 use rand::Rng;
+use serde::{Serialize, Deserialize};
 
-#[derive(Debug)]
+#[macro_use] extern crate serde_derive;
+
+#[derive(Serialize, Deserialize, Debug)]
 struct Order {
     order_id: u64,
     item: String,
     mins_to_cook: u8,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 struct Data {
     order_count: u64,
     tables: HashMap<u64, Vec<Order>>,
@@ -45,14 +48,32 @@ impl Data {
         };
     }
 }
+
 async fn handle_request(req: Request<Body>, data: Arc<std::sync::Mutex<Data>>) -> Result<Response<Body>, hyper::Error> {
     match (req.method(), req.uri().path()) {
+        (&Method::GET, "/items") => {
+            let params: HashMap<String, String> = req
+                .uri()
+                .query()
+                .map(|val| {
+                    url::form_urlencoded::parse(val.as_bytes())
+                    .into_owned()
+                    .collect()
+                }).unwrap_or_else(HashMap::new);
+
+            let response = get_items(data.clone(), params);
+            Ok(response)
+        },
         (&Method::POST, "/items") => {
             let body_bytes = hyper::body::to_bytes(req.into_body()).await?;
             let value: Value = serde_json::from_slice(&body_bytes).unwrap();
             let response = post_items(data.clone(), value);
             Ok(response)
         },
+        // (&Method::DELETE, "/items") => {
+        //     let response = delete_item(data.clone());
+        //     Ok(response)
+        // },
         _ => {
             let mut not_found = Response::default();
             *not_found.status_mut() = StatusCode::NOT_FOUND;
@@ -92,11 +113,29 @@ async fn shutdown_signal() {
         .expect("failed to install CTRL+C signal handler");
 }
 
+fn get_items(data: Arc<Mutex<Data>>, params: HashMap<String, String>) -> Response<Body> {
+    let mut response = Response::default();
+    let table = params.get("table");
+
+    if table.is_none() {
+        *response.status_mut() = StatusCode::BAD_REQUEST;
+        return response;
+    }
+
+    let table_int = table.unwrap().parse::<u64>().unwrap();
+    let json_string = serde_json::to_string(data.lock().unwrap().tables.get(&table_int).unwrap()).unwrap();
+
+    *response.body_mut() = hyper::Body::from(json_string);
+    *response.status_mut() = StatusCode::OK;
+    response
+}
+
 fn post_items(data: Arc<Mutex<Data>>, value: Value) -> Response<Body> {
+    let mut response = Response::default();
+
     let table = value["table"].as_u64();
     let items = value["items"].as_array();
     if table.is_none() || items.is_none() {
-        let mut response = Response::default();
         *response.status_mut() = StatusCode::BAD_REQUEST;
         return response
     }
@@ -110,7 +149,16 @@ fn post_items(data: Arc<Mutex<Data>>, value: Value) -> Response<Body> {
     data.lock().unwrap().add_items(table.unwrap(), items);
     println!("{:?}", data.lock().unwrap());
 
-    let mut response = Response::default();
     *response.status_mut() = StatusCode::OK;
-    return response
+    response
 }
+
+// fn delete_item(data: Arc<Mutex<Data>>, value: Value) -> Response<Body> {
+    // let mut response = Response::default();
+
+    // let table = value["table"].as_u64();
+    // let order_id = value["order_id"].as_u64();
+
+    // *response.status_mut() = StatusCode::OK;
+    // return response
+// }
