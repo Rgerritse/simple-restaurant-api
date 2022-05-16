@@ -48,14 +48,23 @@ impl SharedData {
         };
     }
 
-    fn remove_item(&mut self, table: u64, order_id: u64) {
-        let orders = self.tables.get_mut(&table).unwrap();
-        println!("orders bef: {:?}", orders);
-        let index = orders.iter().position(|o| o.order_id == order_id).unwrap();
+    fn remove_item(&mut self, table: u64, order_id: u64) -> Option<String> {
+        let orders = self.tables.get_mut(&table);
 
-        println!("index: {}", index);
-        orders.remove(index);
-        println!("order af {:?}", orders);
+        let orders = match orders {
+            Some(orders) => orders,
+            None => return Some(String::from("order does not exist"))
+        };
+
+        let index = orders.iter().position(|o| o.order_id == order_id);
+
+        match index {
+            Some(index) => {
+                orders.remove(index);
+                None
+            },
+            None => Some(String::from("order does not exit"))
+        }
     }
 }
 
@@ -75,15 +84,29 @@ async fn handle_request(req: Request<Body>, data: Arc<std::sync::Mutex<SharedDat
             Ok(response)
         },
         (&Method::POST, "/items") => {
-            let body_bytes = hyper::body::to_bytes(req.into_body()).await?;
-            let value: Value = serde_json::from_slice(&body_bytes).unwrap();
-            let response = post_items(data.clone(), value);
+            let value = parse_body_to_json(req.into_body()).await;
+            let response = match value {
+                Some(value) => post_items(data.clone(), value),
+                None => {
+                    let mut response = Response::default();
+                    *response.status_mut() = StatusCode::BAD_REQUEST;
+                    response
+                },
+            };
+            
             Ok(response)
         },
         (&Method::POST, "/items/delete") => {
-            let body_bytes = hyper::body::to_bytes(req.into_body()).await?;
-            let value: Value = serde_json::from_slice(&body_bytes).unwrap();
-            let response = delete_item(data.clone(), value);
+            let value = parse_body_to_json(req.into_body()).await;
+            let response = match value {
+                Some(value) => delete_item(data.clone(), value),
+                None => {
+                    let mut response = Response::default();
+                    *response.status_mut() = StatusCode::BAD_REQUEST;
+                    response
+                },
+            };
+            
             Ok(response)
         },
         _ => {
@@ -130,15 +153,29 @@ fn get_items(shared_data: Arc<Mutex<SharedData>>, params: HashMap<String, String
     let table = params.get("table");
 
     if table.is_none() {
+        *response.body_mut() = hyper::Body::from("missing required field: 'table'");
         *response.status_mut() = StatusCode::BAD_REQUEST;
         return response;
     }
 
-    let table_int = table.unwrap().parse::<u64>().unwrap();
+    let table_int = table.unwrap().parse::<u64>();
+
+    let table_int = match table_int {
+        Ok(table_int) => table_int,
+        Err(_) => {
+            *response.body_mut() = hyper::Body::from("'table' must be an unassigned integer!");
+            *response.status_mut() = StatusCode::BAD_REQUEST;
+            return response;
+        },
+    };
     
     let data = shared_data.lock().unwrap();
-    let items = data.tables.get(&table_int).unwrap();
-    let json_string = serde_json::to_string(items).unwrap();
+    let items = data.tables.get(&table_int);
+
+    let json_string = match items {
+        Some(items) => serde_json::to_string(items).unwrap(),
+        None => String::from("")
+    };
 
     *response.body_mut() = hyper::Body::from(json_string);
     *response.status_mut() = StatusCode::OK;
@@ -148,9 +185,22 @@ fn get_items(shared_data: Arc<Mutex<SharedData>>, params: HashMap<String, String
 fn post_items(shared_data: Arc<Mutex<SharedData>>, value: Value) -> Response<Body> {
     let mut response = Response::default();
 
+    if value["table"].is_null() || value["items"].is_null() {
+        *response.body_mut() = hyper::Body::from("missing required fields: 'table' and\\or 'items'");
+        *response.status_mut() = StatusCode::BAD_REQUEST;
+        return response
+    }
+
     let table = value["table"].as_u64();
+    if table.is_none() {
+        *response.body_mut() = hyper::Body::from("'table' must be an unassigned integer!");
+        *response.status_mut() = StatusCode::BAD_REQUEST;
+        return response
+    }
+
     let items = value["items"].as_array();
-    if table.is_none() || items.is_none() {
+    if items.is_none() {
+        *response.body_mut() = hyper::Body::from("'items' must be an array!");
         *response.status_mut() = StatusCode::BAD_REQUEST;
         return response
     }
@@ -170,16 +220,54 @@ fn post_items(shared_data: Arc<Mutex<SharedData>>, value: Value) -> Response<Bod
 fn delete_item(shared_data: Arc<Mutex<SharedData>>, value: Value) -> Response<Body>  {
     let mut response = Response::default();
 
-    let table = value["table"].as_u64();
-    let order_id = value["order_id"].as_u64();
-
-    if table.is_none() || order_id.is_none() {
+    if value["table"].is_null() || value["order_id"].is_null() {
+        *response.body_mut() = hyper::Body::from("missing required fields: 'table' and\\or 'order_id'");
         *response.status_mut() = StatusCode::BAD_REQUEST;
         return response
     }
 
-    shared_data.lock().unwrap().remove_item(table.unwrap(), order_id.unwrap());
+    let table = value["table"].as_u64();
+    if table.is_none() {
+        *response.body_mut() = hyper::Body::from("'table' must be an unassigned integer!");
+        *response.status_mut() = StatusCode::BAD_REQUEST;
+        return response
+    }
 
-    *response.status_mut() = StatusCode::OK;
+    let order_id = value["order_id"].as_u64();
+    if order_id.is_none() {
+        *response.body_mut() = hyper::Body::from("'order_id' must be an unassigned integer!");
+        *response.status_mut() = StatusCode::BAD_REQUEST;
+        return response
+    }
+
+    let message = shared_data.lock().unwrap().remove_item(table.unwrap(), order_id.unwrap());
+    match message {
+        Some(message) => {
+            *response.body_mut() = hyper::Body::from(message);
+            *response.status_mut() = StatusCode::BAD_REQUEST;
+        },
+        None => {
+            *response.status_mut() = StatusCode::OK;
+        },
+    }
+
     response
+}
+
+async fn parse_body_to_json(body: Body) -> Option<Value> {
+    let bytes = hyper::body::to_bytes(body).await;
+
+    let bytes = match bytes {
+        Ok(bytes) => bytes,
+        Err(_) => return None,
+    };
+
+    let value = serde_json::from_slice(&bytes);
+
+    let value: Value = match value {
+        Ok(value) => value,
+        Err(_) => return None,
+    };
+
+    Some(value) 
 }
