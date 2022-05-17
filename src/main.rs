@@ -100,9 +100,7 @@ fn get_items(shared_data: Arc<Mutex<SharedData>>, params: HashMap<String, String
     let table = params.get("table");
 
     if table.is_none() {
-        *response.body_mut() = hyper::Body::from("missing required field: 'table'");
-        *response.status_mut() = StatusCode::BAD_REQUEST;
-        return response;
+        return create_400_response("missing required field: 'table'".to_string());
     }
 
     let table_int = table.unwrap().parse::<u64>();
@@ -110,9 +108,7 @@ fn get_items(shared_data: Arc<Mutex<SharedData>>, params: HashMap<String, String
     let table_int = match table_int {
         Ok(table_int) => table_int,
         Err(_) => {
-            *response.body_mut() = hyper::Body::from("'table' must be an unassigned integer!");
-            *response.status_mut() = StatusCode::BAD_REQUEST;
-            return response;
+            return create_400_response("'table' must be an unassigned integer!".to_string());
         },
     };
     
@@ -133,88 +129,89 @@ fn post_items(shared_data: Arc<Mutex<SharedData>>, value: Value) -> Response<Bod
     let mut response = Response::default();
 
     if value["table"].is_null() || value["items"].is_null() {
-        *response.body_mut() = hyper::Body::from("missing required fields: 'table' and\\or 'items'");
-        *response.status_mut() = StatusCode::BAD_REQUEST;
-        return response
+        return create_400_response("missing required fields: 'table' and\\or 'items'".to_string());
     }
 
     let table = value["table"].as_u64();
     if table.is_none() {
-        *response.body_mut() = hyper::Body::from("'table' must be an unassigned integer!");
-        *response.status_mut() = StatusCode::BAD_REQUEST;
-        return response
+        return create_400_response("'table' must be an unassigned integer!".to_string());
     }
 
     let items = value["items"].as_array();
     if items.is_none() {
-        *response.body_mut() = hyper::Body::from("'items' must be an array!");
-        *response.status_mut() = StatusCode::BAD_REQUEST;
-        return response
+        return create_400_response("'items' must be an array of strings!".to_string());
     }
 
     let items = items
         .unwrap()
         .into_iter()
-        .map(|x| x.to_string())
-        .collect::<Vec<String>>();
+        .map(|x| {
+            let temp = x.as_str();
+            if temp.is_none() { return Err(()); }
+            Ok(temp.unwrap().to_string())
+        })
+        .collect::<Result<Vec<_>, ()>>();
 
-        shared_data.lock().unwrap().add_items(table.unwrap(), items);
+    let items = match items {
+        Ok(items) => items,
+        Err(_) => {
+            return create_400_response("'items' must be an array of strings!".to_string());
+        },
+    };
+
+    shared_data.lock().unwrap().add_items(table.unwrap(), items);
 
     *response.status_mut() = StatusCode::OK;
     response
 }
 
 fn delete_item(shared_data: Arc<Mutex<SharedData>>, value: Value) -> Response<Body>  {
-    let mut response = Response::default();
-
     if value["table"].is_null() || value["order_id"].is_null() {
-        *response.body_mut() = hyper::Body::from("missing required fields: 'table' and\\or 'order_id'");
-        *response.status_mut() = StatusCode::BAD_REQUEST;
-        return response
+        return create_400_response("missing required fields: 'table' and\\or 'order_id'".to_string());
     }
 
     let table = value["table"].as_u64();
     if table.is_none() {
-        *response.body_mut() = hyper::Body::from("'table' must be an unassigned integer!");
-        *response.status_mut() = StatusCode::BAD_REQUEST;
-        return response
+        return create_400_response("'table' must be an unassigned integer!".to_string());
     }
 
     let order_id = value["order_id"].as_u64();
     if order_id.is_none() {
-        *response.body_mut() = hyper::Body::from("'order_id' must be an unassigned integer!");
-        *response.status_mut() = StatusCode::BAD_REQUEST;
-        return response
+        return create_400_response("'order_id' must be an unassigned integer!".to_string());
     }
 
     let message = shared_data.lock().unwrap().remove_item(table.unwrap(), order_id.unwrap());
     match message {
         Some(message) => {
-            *response.body_mut() = hyper::Body::from(message);
-            *response.status_mut() = StatusCode::BAD_REQUEST;
+            return create_400_response(message)
         },
         None => {
+            let mut response = Response::default();
             *response.status_mut() = StatusCode::OK;
+            response
         },
     }
-
-    response
 }
 
 async fn parse_body_to_json(body: Body) -> Option<Value> {
     let bytes = hyper::body::to_bytes(body).await;
-
     let bytes = match bytes {
         Ok(bytes) => bytes,
         Err(_) => return None,
     };
 
     let value = serde_json::from_slice(&bytes);
-
     let value: Value = match value {
         Ok(value) => value,
         Err(_) => return None,
     };
 
     Some(value) 
+}
+
+fn create_400_response(message: String) -> Response<Body> {
+    let mut response = Response::default();
+    *response.body_mut() = hyper::Body::from(message);
+    *response.status_mut() = StatusCode::BAD_REQUEST;
+    return response
 }
