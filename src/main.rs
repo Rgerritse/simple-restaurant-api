@@ -17,7 +17,7 @@ use serde_json::Value;
 
 #[tokio::main]
 async fn main() {
-    let data = Arc::new(Mutex::new(SharedData { order_counter: 0, tables: HashMap::new() })) ;
+    let data = Arc::new(Mutex::new(SharedData::new()));
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
 
@@ -96,16 +96,13 @@ async fn shutdown_signal() {
 }
 
 fn get_items(shared_data: Arc<Mutex<SharedData>>, params: HashMap<String, String>) -> Response<Body> {
-    let mut response = Response::default();
     let table = params.get("table");
 
     if table.is_none() {
         return create_400_response("missing required field: 'table'".to_string());
     }
 
-    let table_int = table.unwrap().parse::<u64>();
-
-    let table_int = match table_int {
+    let table_int = match table.unwrap().parse::<u64>() {
         Ok(table_int) => table_int,
         Err(_) => {
             return create_400_response("'table' must be an unassigned integer!".to_string());
@@ -113,15 +110,40 @@ fn get_items(shared_data: Arc<Mutex<SharedData>>, params: HashMap<String, String
     };
     
     let data = shared_data.lock().unwrap();
-    let items = data.tables.get(&table_int);
+    let items = data.get_tables().get(&table_int);
 
-    let json_string = match items {
-        Some(items) => serde_json::to_string(items).unwrap(),
-        None => String::from("")
-    };
+    let order_id = params.get("order_id");
+
+    let mut response = Response::default();
+    let json_string: String;
+    *response.status_mut() = StatusCode::OK;
+
+    if order_id.is_none() {
+        json_string = match items {
+            Some(items) => serde_json::to_string(items).unwrap(),
+            None => "[]".to_string(),
+        };
+    } else {
+        let order_id_int = match order_id.unwrap().parse::<u64>() {
+            Ok(order_id_int) => order_id_int,
+            Err(_) => {
+                return create_400_response("'order_id' must be an unassigned integer!".to_string());
+            },
+        };
+
+        if items.is_none() {
+            return create_400_response(format!("order {} doesn't exist at table {}", order_id_int, table_int).to_string());
+        } else {
+            let order = items.unwrap().into_iter().find(|&o| o.get_order_id() == order_id_int);
+            if order.is_none() {
+                return create_400_response(format!("order {} doesn't exist at table {}", order_id_int, table_int).to_string());
+            }
+
+            json_string = serde_json::to_string(&order).unwrap();
+        }
+    }
 
     *response.body_mut() = hyper::Body::from(json_string);
-    *response.status_mut() = StatusCode::OK;
     response
 }
 

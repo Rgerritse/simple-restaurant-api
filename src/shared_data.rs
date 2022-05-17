@@ -9,13 +9,27 @@ pub struct Order {
     mins_to_cook: u8,
 }
 
+impl Order {
+    pub fn get_order_id(&self) -> u64 {
+        self.order_id
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SharedData {
-    pub order_counter: u64,
-    pub tables: HashMap<u64, Vec<Order>>,
+    order_counter: u64,
+    tables: HashMap<u64, Vec<Order>>,
 }
 
 impl SharedData {
+    pub fn new() -> SharedData {
+        SharedData { order_counter: 0, tables: HashMap::new() }
+    }
+
+    pub fn get_tables(&self) -> &HashMap<u64, Vec<Order>> {
+        &self.tables
+    }
+
     pub fn add_items(&mut self, table: u64, items: Vec<String>) {
         let mut rng = rand::thread_rng();
         let mut orders = items.iter().map(|item| {
@@ -43,7 +57,7 @@ impl SharedData {
 
         let orders = match orders {
             Some(orders) => orders,
-            None => return Some(String::from("order does not exist"))
+            None => return Some(format!("order {} doesn't exist at table {}", order_id, table).to_string())
         };
 
         let index = orders.iter().position(|o| o.order_id == order_id);
@@ -54,7 +68,7 @@ impl SharedData {
                 if orders.len() == 0 { self.tables.remove(&table); }
                 None
             },
-            None => Some(String::from("order does not exit"))
+            None => Some(format!("order {} doesn't exist at table {}", order_id, table).to_string())
         }
     }
 }
@@ -67,7 +81,7 @@ mod tests {
 
     #[test]
     fn test_add_items() {
-        let mut shared_data1 = SharedData { order_counter: 0, tables: HashMap::new() };
+        let mut shared_data1 = SharedData::new();
        
         shared_data1.add_items(1, vec!["pizza".to_string(), "tea".to_string()]);
 
