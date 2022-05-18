@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use rand::Rng;
 
+// Representation of a single order in the data base
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Order {
     order_id: u64,
@@ -15,6 +16,7 @@ impl Order {
     }
 }
 
+// Representation of a data base containing orders seperated by their table
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SharedData {
     order_counter: u64,
@@ -32,6 +34,7 @@ impl SharedData {
 
     pub fn add_items(&mut self, table: u64, items: Vec<String>) {
         let mut rng = rand::thread_rng();
+
         let mut orders = items.iter().map(|item| {
             let order = Order {
                 order_id: self.order_counter,
@@ -43,12 +46,8 @@ impl SharedData {
         }).collect::<Vec<Order>>();
 
         match self.tables.get_mut(&table) {
-            Some(v) => {
-                v.append(&mut orders)
-            }
-            None => {     
-                self.tables.insert(table, orders);  
-            }
+            Some(v) => { v.append(&mut orders); }
+            None => { self.tables.insert(table, orders); }
         };
     }
 

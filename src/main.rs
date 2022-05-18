@@ -119,11 +119,15 @@ fn get_items(shared_data: Arc<Mutex<SharedData>>, params: HashMap<String, String
     *response.status_mut() = StatusCode::OK;
 
     if order_id.is_none() {
+        // Logic for setting response body for when no order_id was provided
+
         json_string = match items {
             Some(items) => serde_json::to_string(items).unwrap(),
             None => "[]".to_string(),
         };
     } else {
+        // Logic for setting response body for when an order_id was provided
+
         let order_id_int = match order_id.unwrap().parse::<u64>() {
             Ok(order_id_int) => order_id_int,
             Err(_) => {
@@ -164,6 +168,7 @@ fn post_items(shared_data: Arc<Mutex<SharedData>>, value: Value) -> Response<Bod
         return create_400_response("'items' must be an array of strings!".to_string());
     }
 
+    // Converts items from Vec<Value> to Vec<String> as needed by SharedData
     let items = items
         .unwrap()
         .into_iter()
