@@ -1,6 +1,6 @@
 # About this project
 
-My rust implementation for a restaurant application which accepts menu items from various serving staff in the restaurant.
+My Rust implementation for a restaurant application which accepts menu items from various serving staff in the restaurant.
 
 ## How to run
 
